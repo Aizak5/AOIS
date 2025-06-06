@@ -105,7 +105,6 @@ class TestDiagonalMatrix16x16(unittest.TestCase):
     
     def test_diagonal_storage(self):
         """Проверка диагонального хранения слов"""
-        # Проверяем, что метод get_word возвращает корректные данные
         for word_idx in range(16):
             original_word = self.dm.words[word_idx]
             stored_word = self.dm.get_word(word_idx)
