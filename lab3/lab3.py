@@ -1,610 +1,405 @@
-import itertools
+from itertools import product
+import re
 
-class Node:
-    def __init__(self, node_type, left=None, right=None, var=None):
-        self.node_type = node_type
-        self.left = left
-        self.right = right
-        self.var = var
-        self.expr_str = None
+def replace_operators(expr):
+    expr = re.sub(r'([a-zA-Z0-1()]+)\s*→\s*([a-zA-Z0-1()]+)', r'(not \1) or \2', expr)
+    expr = re.sub(r'([a-zA-Z0-1()]+)\s*⇒\s*([a-zA-Z0-1()]+)', r'(not \1) or \2', expr)
+    expr = re.sub(r'([a-zA-Z0-1()]+)\s*↔\s*([a-zA-Z0-1()]+)', r'(\1 == \2)', expr)
+    expr = re.sub(r'([a-zA-Z0-1()]+)\s*⇔\s*([a-zA-Z0-1()]+)', r'(\1 == \2)', expr)
+    
+    expr = (expr.replace('!', ' not ')
+            .replace('&', ' and ')
+            .replace('|', ' or '))
+    
+    return expr
 
-def preprocess_expression(expr: str) -> str:
-    return expr.replace(" ", "")
+def generate_truth_table_and_forms(expr):
+    normalized_expr = expr.replace(' ', '').replace('!', '¬').replace('&', '∧').replace('|', '∨')
+    vars_ = sorted(list(set(re.findall(r'\b[a-z]\b', normalized_expr))))
+    n_vars = len(vars_)
 
-def tokenize(expr: str):
-    tokens = []
-    i = 0
-    while i < len(expr):
-        if expr[i:i+2] == "->":
-            tokens.append("->")
-            i += 2
-        elif expr[i] in ['(', ')', '!', '&', '|', '~']:
-            tokens.append(expr[i])
-            i += 1
-        elif expr[i].isalpha():
-            tokens.append(expr[i])
-            i += 1
-        else:
-            i += 1
-    return tokens
+    truth_table = []
+    for values in product([0, 1], repeat=n_vars):
+        var_values = dict(zip(vars_, values))
+        current_expr = normalized_expr
 
-def shunting_yard(tokens):
-    precedence = {'!': 4, '&': 3, '|': 2, '->': 1, '~': 0}
-    right_assoc = {'!': True, '&': False, '|': False, '->': False, '~': False}
-    output_queue = []
-    op_stack = []
-    for token in tokens:
-        if token.isalpha():
-            output_queue.append(token)
-        elif token == '!':
-            op_stack.append(token)
-        elif token in ['&','|','->','~']:
-            while op_stack and op_stack[-1] != '(':
-                top = op_stack[-1]
-                if top not in precedence:
-                    break
-                top_prec = precedence[top]
-                cur_prec = precedence[token]
-                if right_assoc.get(token, False):
-                    if top_prec > cur_prec:
-                        output_queue.append(op_stack.pop())
-                    else:
-                        break
-                else:
-                    if top_prec >= cur_prec:
-                        output_queue.append(op_stack.pop())
-                    else:
-                        break
-            op_stack.append(token)
-        elif token == '(':
-            op_stack.append(token)
-        elif token == ')':
-            while op_stack and op_stack[-1] != '(':
-                output_queue.append(op_stack.pop())
-            if op_stack and op_stack[-1] == '(':
-                op_stack.pop()
-        else:
-            raise ValueError(f"Неизвестный токен: {token}")
-    while op_stack:
-        output_queue.append(op_stack.pop())
-    return output_queue
+        for var in vars_:
+            current_expr = current_expr.replace(var, str(var_values[var]))
 
-def rpn_to_ast(rpn_tokens):
-    stack = []
-    for token in rpn_tokens:
-        if token.isalpha():
-            stack.append(Node('var', var=token))
-        elif token == '!':
-            if not stack:
-                raise ValueError("Ошибка: недостаточно операндов для '!'")
-            operand = stack.pop()
-            stack.append(Node('not', left=operand))
-        elif token in ['&','|','->','~']:
-            if len(stack) < 2:
-                raise ValueError(f"Ошибка: недостаточно операндов для {token}")
-            right = stack.pop()
-            left = stack.pop()
-            if token == '&':
-                node_type = 'and'
-            elif token == '|':
-                node_type = 'or'
-            elif token == '->':
-                node_type = 'implies'
-            elif token == '~':
-                node_type = 'equiv'
-            stack.append(Node(node_type, left=left, right=right))
-        else:
-            raise ValueError(f"Неизвестный токен в ОПЗ: {token}")
-    if len(stack) != 1:
-        raise ValueError("Ошибка: некорректное выражение (лишние операнды/операторы)")
-    return stack[0]
+        current_expr = replace_operators(current_expr)
+        current_expr = ' '.join(current_expr.split())
 
-def parse_expression(expr: str) -> Node:
-    expr_prepared = preprocess_expression(expr)
-    tokens = tokenize(expr_prepared)
-    rpn = shunting_yard(tokens)
-    ast = rpn_to_ast(rpn)
-    return ast
+        try:
+            result = eval(current_expr)
+            truth_table.append((values, int(bool(result))))
+        except Exception as e:
+            print(f"Ошибка при вычислении выражения: {e}")
+            print(f"Выражение после замен: {current_expr}")
+            return None
 
-def label_sub_expressions(root: Node) -> None:
-    if root.node_type == 'var':
-        root.expr_str = root.var
-    elif root.node_type == 'not':
-        label_sub_expressions(root.left)
-        if root.left.node_type in ('and','or','implies','equiv'):
-            root.expr_str = f"¬({root.left.expr_str})"
-        else:
-            root.expr_str = f"¬{root.left.expr_str}"
-    elif root.node_type == 'and':
-        label_sub_expressions(root.left)
-        label_sub_expressions(root.right)
-        left_s = root.left.expr_str
-        right_s = root.right.expr_str
-        if root.left.node_type in ('or','implies','equiv'):
-            left_s = f"({left_s})"
-        if root.right.node_type in ('or','implies','equiv'):
-            right_s = f"({right_s})"
-        root.expr_str = f"{left_s}∧{right_s}"
-    elif root.node_type == 'or':
-        label_sub_expressions(root.left)
-        label_sub_expressions(root.right)
-        left_s = root.left.expr_str
-        right_s = root.right.expr_str
-        if root.left.node_type in ('implies','equiv'):
-            left_s = f"({left_s})"
-        if root.right.node_type in ('and','implies','equiv'):
-            right_s = f"({right_s})"
-        root.expr_str = f"{left_s}∨{right_s}"
-    elif root.node_type == 'implies':
-        label_sub_expressions(root.left)
-        label_sub_expressions(root.right)
-        left_s = root.left.expr_str
-        if root.left.node_type in ('and','or','implies','equiv'):
-            left_s = f"({left_s})"
-        right_s = root.right.expr_str
-        if root.right.node_type in ('and','or','implies','equiv'):
-            right_s = f"({right_s})"
-        root.expr_str = f"{left_s}→{right_s}"
-    elif root.node_type == 'equiv':
-        label_sub_expressions(root.left)
-        label_sub_expressions(root.right)
-        left_s = root.left.expr_str
-        if root.left.node_type in ('and','or','implies','equiv'):
-            left_s = f"({left_s})"
-        right_s = root.right.expr_str
-        if root.right.node_type in ('and','or','implies','equiv'):
-            right_s = f"({right_s})"
-        root.expr_str = f"{left_s}↔{right_s}"
+    minterms = [term for term, res in truth_table if res == 1]
+    maxterms = [term for term, res in truth_table if res == 0]
 
-def compute_depth(node: Node) -> int:
-    if node.node_type == 'var':
-        return 1
-    elif node.node_type == 'not':
-        return compute_depth(node.left) + 1
-    else:
-        return max(compute_depth(node.left), compute_depth(node.right)) + 1
-
-def collect_sub_expressions_in_order(root: Node):
-    visited = {}
-    result = []
-    def traverse(node):
-        if not node:
-            return
-        if node.node_type in ('and','or','implies','equiv'):
-            traverse(node.left)
-            if node.expr_str not in visited:
-                visited[node.expr_str] = node
-                result.append(node)
-            traverse(node.right)
-        elif node.node_type == 'not':
-            traverse(node.left)
-            if node.expr_str not in visited:
-                visited[node.expr_str] = node
-                result.append(node)
-        else:
-            if node.expr_str not in visited:
-                visited[node.expr_str] = node
-                result.append(node)
-    traverse(root)
-    return result
-
-def evaluate_ast(root: Node, env: dict) -> bool:
-    if root.node_type == 'var':
-        return env[root.var]
-    elif root.node_type == 'not':
-        return not evaluate_ast(root.left, env)
-    elif root.node_type == 'and':
-        return evaluate_ast(root.left, env) and evaluate_ast(root.right, env)
-    elif root.node_type == 'or':
-        return evaluate_ast(root.left, env) or evaluate_ast(root.right, env)
-    elif root.node_type == 'implies':
-        return (not evaluate_ast(root.left, env)) or evaluate_ast(root.right, env)
-    elif root.node_type == 'equiv':
-        return evaluate_ast(root.left, env) == evaluate_ast(root.right, env)
-    else:
-        raise ValueError("Неизвестный тип узла")
-
-def generate_truth_table_and_forms(expr: str):
-    ast = parse_expression(expr)
-    label_sub_expressions(ast)
-    all_nodes = collect_sub_expressions_in_order(ast)
-    var_nodes = [n for n in all_nodes if n.node_type == 'var']
-    complex_nodes = [n for n in all_nodes if n.node_type != 'var']
-    var_nodes_sorted = sorted(var_nodes, key=lambda n: n.var)
-    if ast.node_type != 'var':
-        non_root_complex = [n for n in complex_nodes if n is not ast]
-        non_root_complex = sorted(non_root_complex, key=lambda n: compute_depth(n))
-        columns = var_nodes_sorted + non_root_complex + [ast]
-    else:
-        columns = var_nodes_sorted
-    header = " | ".join(node.expr_str for node in columns)
-    print(header)
-    print("-" * len(header))
-    vars_sorted = [n.var for n in var_nodes_sorted]
-    n_vars = len(vars_sorted)
-    truth_rows = []
-    index_bits = []
-    for combo in itertools.product([0, 1], repeat=n_vars):
-        env = {var: bool(val) for var, val in zip(vars_sorted, combo)}
-        row_vals = []
-        for node in columns:
-            row_vals.append("1" if evaluate_ast(node, env) else "0")
-        f_val = 1 if evaluate_ast(ast, env) else 0
-        truth_rows.append((combo, f_val))
-        index_bits.append("1" if f_val else "0")
-        print(" | ".join(row_vals))
-    minterms = []
-    maxterms = []
-    for combo, f_val in truth_rows:
-        index = int("".join(str(bit) for bit in combo), 2)
-        if f_val == 1:
-            minterms.append(index)
-        else:
-            maxterms.append(index)
-    dnf_terms = []
-    cnf_terms = []
-    for combo, f_val in truth_rows:
-        if f_val == 1:
-            term_literals = []
-            for bit, var in zip(combo, vars_sorted):
-                term_literals.append(var if bit == 1 else "¬" + var)
-            dnf_terms.append("(" + "∧".join(term_literals) + ")")
-        else:
-            term_literals = []
-            for bit, var in zip(combo, vars_sorted):
-                term_literals.append(var if bit == 0 else "¬" + var)
-            cnf_terms.append("(" + "∨".join(term_literals) + ")")
-    dnf_formula = " ∨ ".join(dnf_terms)
-    cnf_formula = " ∧ ".join(cnf_terms)
-    binary_str = "".join(index_bits)
-    index_value = int(binary_str, 2)
-    binary_str_padded = format(index_value, f"0{2 ** n_vars}b")
-    print("\nСовершенная дизъюнктивная нормальная форма (СДНФ)")
-    print(dnf_formula)
-    print("\nСовершенная конъюнктивная нормальная форма (СКНФ)")
-    print(cnf_formula)
     return {
-        'minterms': sorted(minterms),
-        'maxterms': sorted(maxterms),
-        'dnf_formula': dnf_formula,
-        'cnf_formula': cnf_formula,
-        'index_value': index_value,
-        'binary_str_padded': binary_str_padded,
-        'vars_sorted': vars_sorted,
+        'minterms': minterms,
+        'maxterms': maxterms,
         'n_vars': n_vars,
-        'ast': ast
+        'vars_sorted': vars_
     }
 
-def int_to_bin_str(num, n_vars):
-    return format(num, '0{}b'.format(n_vars))
-
-def combine_terms(t1, t2):
-    diff = 0
-    res = []
-    for a, b in zip(t1, t2):
-        if a == b:
-            res.append(a)
-        else:
-            res.append('-')
-            diff += 1
-    return "".join(res) if diff == 1 else None
-
-def bin_to_lits(bstr, vars_, is_dnf=True):
-    res = []
-    for ch, v in zip(bstr, vars_):
-        if ch == '-':
+def term_to_str(term, variables, is_dnf=True):
+    parts = []
+    for val, var in zip(term, variables):
+        if val == 'X':
             continue
         if is_dnf:
-            res.append(v if ch == '1' else "¬" + v)
+            parts.append(f"¬{var}" if val == 0 else var)
         else:
-            res.append("¬" + v if ch == '1' else v)
-    connector = "∧" if is_dnf else "∨"
-    return connector.join(res) if res else ("1" if is_dnf else "0")
+            parts.append(var if val == 0 else f"¬{var}")
+    return "".join(parts) if is_dnf else f"({'∨'.join(parts)})" if parts else ""
 
-def literal_set_from_binary(bstr, vars_, is_dnf):
-    lits = []
-    for ch, v in zip(bstr, vars_):
-        if ch == '-':
-            continue
-        if is_dnf:
-            lits.append(v if ch == '1' else "¬" + v)
-        else:
-            lits.append("¬" + v if ch == '1' else v)
-    return set(lits)
+def minimize_calc_dnf(terms, n_vars, vars_):
+    return calculate_method(terms, vars_, is_dnf=True)
 
-def covers(impl, bstr):
-    return all(a == b or a == '-' for a, b in zip(impl, bstr))
+def minimize_calc_cnf(terms, n_vars, vars_):
+    return calculate_method(terms, vars_, is_dnf=False)
 
-def eliminate_redundant_implicants(implicants, terms, n_vars):
-    reduced = list(implicants)
-    changed = True
-    while changed:
-        changed = False
-        for imp in list(reduced):
-            test_set = [x for x in reduced if x != imp]
-            all_covered = True
-            for t in terms:
-                b = int_to_bin_str(t, n_vars)
-                if not any(covers(candidate, b) for candidate in test_set):
-                    all_covered = False
-                    break
-            if all_covered:
-                reduced.remove(imp)
-                changed = True
-    return reduced
+def calculate_method(terms, variables, is_dnf=True):
+    if not terms:
+        return []
 
-def absorb_clauses(implicants, vars_, is_dnf):
-    literal_sets = [(imp, literal_set_from_binary(imp, vars_, is_dnf)) for imp in implicants]
-    result = []
-    for i, (imp_i, set_i) in enumerate(literal_sets):
-        redundant = False
-        for j, (imp_j, set_j) in enumerate(literal_sets):
-            if i != j and set_j <= set_i:
-                redundant = True
-                break
-        if not redundant:
-            result.append(imp_i)
-    return result
+    print("\nИтерации склеивания:")
+    current_terms = terms.copy()
 
-def quine_mccluskey_calc(terms, n_vars, vars_, is_dnf=True):
-    groups = {}
-    for t in terms:
-        b = int_to_bin_str(t, n_vars)
-        ones = b.count('1')
-        groups.setdefault(ones, set()).add(b)
-    print("\n=== Склеивание: Исходные группы ===")
-    for k in sorted(groups.keys()):
-        items = sorted(groups[k])
-        print(f"Итерация {k}: " + ", ".join(bin_to_lits(x, vars_, is_dnf) for x in items))
-    stage = 1
-    final_combs = []
     while True:
-        new_groups = {}
-        combined_this_stage = set()
-        sorted_keys = sorted(groups.keys())
-        for i in range(len(sorted_keys) - 1):
-            for term1 in groups[sorted_keys[i]]:
-                for term2 in groups[sorted_keys[i+1]]:
-                    comb = combine_terms(term1, term2)
-                    if comb:
-                        new_groups.setdefault(comb.count('1'), set()).add(comb)
-                        combined_this_stage.add(term1)
-                        combined_this_stage.add(term2)
-        for k2 in groups:
-            for t2 in groups[k2]:
-                if t2 not in combined_this_stage:
-                    final_combs.append(t2)
-        if not new_groups:
-            print(f"\n=== Склеивание завершено на стадии {stage} ===")
-            break
-        for k3 in sorted(new_groups.keys()):
-            items = sorted(new_groups[k3])
-            print(f"Итерация {k3}: " + ", ".join(bin_to_lits(x, vars_, is_dnf) for x in items))
-        stage += 1
-        groups = new_groups
-    return sorted(set(final_combs))
-
-def select_essential_calc(prime_implicants, terms, n_vars, vars_, is_dnf=True):
-    if is_dnf:
-        return prime_implicants
-    else:
-        remaining = list(prime_implicants)
-        to_remove = set()
-        for i in range(len(remaining)):
-            for j in range(len(remaining)):
-                if i != j:
-                    set_i = literal_set_from_binary(remaining[i], vars_, is_dnf)
-                    set_j = literal_set_from_binary(remaining[j], vars_, is_dnf)
-                    if set_i <= set_j:
-                        to_remove.add(remaining[j])
-        return [imp for imp in remaining if imp not in to_remove]
-
-def minimize_calc_dnf(minterms, n_vars, vars_):
-    print("\n==== Минимизация СДНФ (расчётный метод) ====")
-    prime = quine_mccluskey_calc(minterms, n_vars, vars_, is_dnf=True)
-    need = select_essential_calc(prime, minterms, n_vars, vars_, is_dnf=True)
-    need = eliminate_redundant_implicants(need, minterms, n_vars)
-    result_terms = []
-    for x in need:
-        result_terms.append("(" + bin_to_lits(x, vars_, True) + ")")
-    minimized = " ∨ ".join(result_terms)
-    if minimized.strip() == "1":
-        minimized = " ∨ ".join(vars_)
-    print("\nРЕЗУЛЬТАТ (расчётный метод, СДНФ): " + minimized)
-    return minimized
-
-def minimize_calc_cnf(maxterms, n_vars, vars_):
-    print("\n==== Минимизация СКНФ (расчётный метод) ====")
-    prime = quine_mccluskey_calc(maxterms, n_vars, vars_, is_dnf=False)
-    need = select_essential_calc(prime, maxterms, n_vars, vars_, is_dnf=False)
-    need = eliminate_redundant_implicants(need, maxterms, n_vars)
-    need = absorb_clauses(need, vars_, is_dnf=False)
-    result_terms = []
-    for x in need:
-        result_terms.append("(" + bin_to_lits(x, vars_, False) + ")")
-    minimized = " ∧ ".join(result_terms)
-    print("\nРЕЗУЛЬТАТ (расчётный метод, СКНФ): " + minimized)
-    return minimized
-
-def build_table(prime, terms, n_vars, vars_, is_dnf=True):
-    table = {}
-    for p in prime:
-        row = []
-        for t in terms:
-            b = int_to_bin_str(t, n_vars)
-            row.append("Х" if covers(p, b) else ".")
-        table[p] = row
-    return table
-
-def print_table_coverage(table, terms, vars_, is_dnf=True):
-    header_cells = [term_to_clause(t, vars_, for_cnf=(not is_dnf)) for t in terms]
-    header_cells = [cell.replace(" ", ".") for cell in header_cells]
-    header = " " * 20 + " ".join(f"{cell:16}" for cell in header_cells)
-    print("\nТаблица покрытия:")
-    print(header)
-    print("-" * len(header))
-    for p in sorted(table.keys()):
-        row_label = bin_to_lits(p, vars_, is_dnf)
-        row = [cell if cell == "Х" else "." for cell in table[p]]
-        print(f"{row_label:20} | " + " ".join(f"{cell:16}" for cell in row))
-
-def term_to_clause(index, var_names, for_cnf=True):
-    n = len(var_names)
-    bits = format(index, f'0{n}b')
-    literals = []
-    for bit, v in zip(bits, var_names):
-        if for_cnf:
-            literal = ("¬" + v) if bit == '1' else v
-        else:
-            literal = v if bit == '1' else ("¬" + v)
-        literals.append(literal)
-    if for_cnf:
-        return "(" + "∨".join(literals) + ")"
-    else:
-        return "(" + "∧".join(literals) + ")"
-
-def quine_mccluskey_tabular(terms, n_vars, vars_, is_dnf=True):
-    prime = quine_mccluskey_calc(terms, n_vars, vars_, is_dnf=is_dnf)
-    coverage = build_table(prime, terms, n_vars, vars_, is_dnf=is_dnf)
-    print_table_coverage(coverage, terms, vars_, is_dnf=is_dnf)
-    return prime
-
-def minimize_tab_dnf(minterms, n_vars, vars_):
-    print("\n==== Минимизация СДНФ (расчётно-табличный метод) ====")
-    prime = quine_mccluskey_tabular(minterms, n_vars, vars_, is_dnf=True)
-    need = select_essential_calc(prime, minterms, n_vars, vars_, is_dnf=True)
-    need = eliminate_redundant_implicants(need, minterms, n_vars)
-    result = []
-    for x in need:
-        result.append("(" + bin_to_lits(x, vars_, True) + ")")
-    minimized = " ∨ ".join(result)
-    print("\nРЕЗУЛЬТАТ (табличный метод, СДНФ): " + minimized)
-    return minimized
-
-def minimize_tab_cnf(maxterms, n_vars, vars_):
-    print("\n==== Минимизация СКНФ (расчётно-табличный метод) ====")
-    prime = quine_mccluskey_tabular(maxterms, n_vars, vars_, is_dnf=False)
-    need = select_essential_calc(prime, maxterms, n_vars, vars_, is_dnf=False)
-    need = eliminate_redundant_implicants(need, maxterms, n_vars)
-    need = absorb_clauses(need, vars_, is_dnf=False)
-    result = []
-    for x in need:
-        result.append("(" + bin_to_lits(x, vars_, False) + ")")
-    minimized = " ∧ ".join(result)
-    print("\nРЕЗУЛЬТАТ (табличный метод, СКНФ): " + minimized)
-    return minimized
-
-def gray_code(n):
-    return [i ^ (i >> 1) for i in range(1 << n)]
-
-def _to_binary_terms(terms, n_vars):
-    return [tuple((t >> i) & 1 for i in reversed(range(n_vars))) for t in terms]
-
-def _merge_pair(a, b):
-    diff = 0
-    merged = []
-    for x, y in zip(a, b):
-        if x != y:
-            diff += 1
-            merged.append('-')
-        else:
-            merged.append(x)
-        if diff > 1:
-            return None
-    return tuple(merged) if diff == 1 else None
-
-def _find_prime_implicants(terms, n_vars):
-    groups = {}
-    for t in terms:
-        groups.setdefault(t.count(1), []).append(t)
-    unchecked = set(terms)
-    primes = set()
-    while groups:
-        new_groups = {}
+        new_terms = []
         used = set()
-        for i in sorted(groups.keys()):
-            for t1 in groups[i]:
-                for t2 in groups.get(i+1, []):
-                    m = _merge_pair(t1, t2)
-                    if m:
-                        used |= {t1, t2}
-                        new_groups.setdefault(m.count(1), []).append(m)
-        primes |= (unchecked - used)
-        unchecked = set(sum(new_groups.values(), []))
-        groups = {}
-        for t in unchecked:
-            groups.setdefault(t.count(1), []).append(t)
-    return primes
 
-def _covers(pi, mt):
-    return all(p == '-' or p == m for p, m in zip(pi, mt))
+        print("\nТекущие термы:")
+        for term in current_terms:
+            print(term_to_str(term, variables, is_dnf), end=" ")
+        print()
 
-def _select_essential(primes, minterms):
-    table = {pi: [mt for mt in minterms if _covers(pi, mt)] for pi in primes}
-    essential = set()
-    covered = set()
-    for mt in minterms:
-        cov = [pi for pi in primes if _covers(pi, mt)]
-        if len(cov) == 1:
-            essential.add(cov[0])
-    for pi in essential:
-        covered |= set(table[pi])
-    rem = set(minterms) - covered
-    while rem:
-        pi, mts = max(table.items(), key=lambda kv: len(set(kv[1]) & rem))
-        essential.add(pi)
-        rem -= set(mts)
-    return essential
+        for i in range(len(current_terms)):
+            for j in range(i + 1, len(current_terms)):
+                term1 = current_terms[i]
+                term2 = current_terms[j]
+                diff_pos = -1
+                diff_count = 0
 
-def kmap_minimize(terms, n_vars, vars_, is_dnf=True):
-    bits = _to_binary_terms(terms, n_vars)
-    primes = _find_prime_implicants(bits, n_vars)
-    essentials = _select_essential(primes, bits)
-    sep = '∧' if is_dnf else '∨'
-    out = []
-    for pi in essentials:
-        parts = []
-        for name, b in zip(vars_, pi):
-            if b == '-': continue
-            if is_dnf:
-                parts.append(name if b else f"¬{name}")
-            else:
-                parts.append(f"¬{name}" if b else name)
-        out.append("(" + sep.join(parts) + ")")
-    return out
+                for k in range(len(variables)):
+                    if term1[k] != term2[k]:
+                        diff_pos = k
+                        diff_count += 1
+
+                if diff_count == 1:
+                    new_term = list(term1)
+                    new_term[diff_pos] = 'X'
+                    new_term = tuple(new_term)
+
+                    if new_term not in new_terms:
+                        new_terms.append(new_term)
+                        used.add(i)
+                        used.add(j)
+                        print(
+                            f"Склеиваем: {term_to_str(term1, variables, is_dnf)} и {term_to_str(term2, variables, is_dnf)} -> {term_to_str(new_term, variables, is_dnf)}")
+
+        for i in range(len(current_terms)):
+            if i not in used and current_terms[i] not in new_terms:
+                new_terms.append(current_terms[i])
+
+        if not new_terms or new_terms == current_terms:
+            break
+
+        current_terms = new_terms
+
+    essential_terms = []
+    uncovered = set(terms)
+
+    while uncovered:
+        best_term = None
+        best_coverage = set()
+        max_coverage = 0
+        max_specificity = -1
+
+        for term in current_terms:
+            covered = set()
+            for original_term in uncovered:
+                if all(p == 'X' or t == p for t, p in zip(original_term, term)):
+                    covered.add(original_term)
+            specificity = sum(1 for v in term if v != 'X')
+            if len(covered) > max_coverage or (len(covered) == max_coverage and specificity > max_specificity):
+                max_coverage = len(covered)
+                max_specificity = specificity
+                best_term = term
+                best_coverage = covered
+
+        if best_term:
+            essential_terms.append(best_term)
+            uncovered -= best_coverage
+        else:
+            break
+
+    print("\nМинимизированная форма:")
+    if essential_terms:
+        separator = " ∨ " if is_dnf else " ∧ "
+        print(separator.join(term_to_str(t, variables, is_dnf) for t in essential_terms))
+    else:
+        print("0" if is_dnf else "1")
+
+    return [term_to_str(t, variables, is_dnf) for t in essential_terms]
+
+def minimize_tab_dnf(terms, n_vars, vars_):
+    return table_method(terms, vars_, is_dnf=True)
+
+def minimize_tab_cnf(terms, n_vars, vars_):
+    return table_method(terms, vars_, is_dnf=False)
+
+def table_method(terms, variables, is_dnf=True):
+    minimized_terms = calculate_method(terms, variables, is_dnf)
+    if not minimized_terms or not terms:
+        return []
+
+    print("\nТаблица покрытия:")
+    imp_width = max(len(t) for t in minimized_terms) + 2
+    term_width = max(len(term_to_str(t, variables, is_dnf)) for t in terms) + 2
+
+    header = " " * imp_width
+    for term in terms:
+        header += f" {term_to_str(term, variables, is_dnf):^{term_width}}"
+    print(header)
+
+    for imp in minimized_terms:
+        row = f" {imp:<{imp_width - 1}}"
+        for term in terms:
+            match = False
+            for t in calculate_method([term], variables, is_dnf):
+                if t == imp:
+                    match = True
+                    break
+            row += f" {'X' if match else ' ':^{term_width}}"
+        print(row)
+
+    print("\nМинимизированная форма:")
+    separator = " ∨ " if is_dnf else " ∧ "
+    print(separator.join(minimized_terms))
+
+    return minimized_terms
+
+def gray_to_binary(gray, bits):
+    binary = gray & (1 << (bits - 1))
+    for i in range(bits - 2, -1, -1):
+        binary |= ((gray >> i) & 1) ^ ((binary >> (i + 1)) & 1) << i
+    return binary
+
+def get_gray_code(n, bits):
+    gray = n ^ (n >> 1)
+    return [(gray >> i) & 1 for i in range(bits - 1, -1, -1)]
+
+def find_max_rectangle(k_map, start_row, start_col, covered):
+    max_area = 0
+    best_rect = None
+    
+    for rows in range(1, len(k_map) - start_row + 1):
+        for cols in range(1, len(k_map[0]) - start_col + 1):
+            if is_valid_rectangle(k_map, start_row, start_col, rows, cols, covered):
+                area = rows * cols
+                if area > max_area:
+                    max_area = area
+                    best_rect = (start_row, start_col, rows, cols)
+    
+    return best_rect
+
+def is_valid_rectangle(k_map, row, col, rows, cols, covered):
+    for r in range(row, row + rows):
+        for c in range(col, col + cols):
+            if k_map[r][c] != 1 or covered[r][c]:
+                return False
+    return True
+
+def get_term_from_rectangle(rect, variables, row_vars, col_vars):
+    row, col, rows, cols = rect
+    term = ['X'] * len(variables)
+    
+    row_bits = [get_gray_code(r, len(row_vars)) for r in range(row, row + rows)]
+    for i, var in enumerate(row_vars):
+        values = set(bits[i] for bits in row_bits)
+        if len(values) == 1:
+            term[variables.index(var)] = values.pop()
+
+    col_bits = [get_gray_code(c, len(col_vars)) for c in range(col, col + cols)]
+    for i, var in enumerate(col_vars):
+        values = set(bits[i] for bits in col_bits)
+        if len(values) == 1:
+            term[variables.index(var)] = values.pop()
+
+    return tuple(term)
+
+def get_term_from_coords(row, col, variables, row_vars, col_vars):
+    term = ['X'] * len(variables)
+    
+    row_bits = get_gray_code(row, len(row_vars))
+    for i, var in enumerate(row_vars):
+        term[variables.index(var)] = row_bits[i]
+    
+    col_bits = get_gray_code(col, len(col_vars))
+    for i, var in enumerate(col_vars):
+        term[variables.index(var)] = col_bits[i]
+    
+    return tuple(term)
 
 def print_kmap_table(terms, n_vars, vars_, is_dnf=True):
-    r = n_vars // 2
-    c = n_vars - r
-    row_codes = gray_code(r)
-    col_codes = gray_code(c)
-    term_set = set(terms)
+    if not terms:
+        print("0 (ложь)" if is_dnf else "1 (истина)")
+        return
 
-    row_vars = "".join(vars_[:r])
-    col_vars = "".join(vars_[r:])
+    if n_vars == 2:
+        rows, cols = 2, 2
+        row_vars = [vars_[0]]
+        col_vars = [vars_[1]]
+    elif n_vars == 3:
+        rows, cols = 2, 4
+        row_vars = [vars_[0]]
+        col_vars = vars_[1:]
+    else:
+        rows, cols = 4, 4
+        row_vars = vars_[:2]
+        col_vars = vars_[2:]
 
-    print(f"{row_vars:>{r}} \\ {col_vars:<{c}}", end=" | ")
-    for code in col_codes:
-        print(f"{code:0{c}b}", end=" | ")
-    print()
-    print("-" * ((c + 3) * (len(col_codes) + 1)))
+    k_map = [[0 for _ in range(cols)] for _ in range(rows)]
 
-    for rc in row_codes:
-        row_bits = f"{rc:0{r}b}"
-        print(f"{row_bits:>{r}}{' ' * (3 - r)}", end=" | ")
-        for cc in col_codes:
-            col_bits = f"{cc:0{c}b}"
-            full = row_bits + col_bits
-            idx = int(full, 2)
-            val = 1 if is_dnf else 0
-            cell = str(val) if idx in term_set else str(1 - val)
-            print(f" {cell} ", end="|")
-        print()
+    for term in terms:
+        row = 0
+        for var in row_vars:
+            row = (row << 1) | term[vars_.index(var)]
+        col = 0
+        for var in col_vars:
+            col = (col << 1) | term[vars_.index(var)]
+        if n_vars >= 3:
+            col = gray_to_binary(col, len(col_vars))
+        k_map[row][col] = 1
+
+    col_width = 3
+    header = " " * len(row_vars)
+    for col in range(len(k_map[0])):
+        col_bits = get_gray_code(col, len(col_vars))
+        header += f"  {''.join(str(b) for b in col_bits):^{col_width}}"
+    print(header)
+
+    for row in range(len(k_map)):
+        row_bits = get_gray_code(row, len(row_vars))
+        row_str = "".join(str(b) for b in row_bits)
+        row_str = row_str.ljust(len(row_vars))
+        for col in range(len(k_map[0])):
+            row_str += f"  {k_map[row][col]:^{col_width}}"
+        print(row_str)
+
+def minimize_karnaugh(k_map, variables, row_vars, col_vars):
+    minimized_terms = []
+    covered = [[False for _ in row] for row in k_map]
+    ones = [(r, c) for r in range(len(k_map)) for c in range(len(k_map[0])) if k_map[r][c] == 1]
+
+    while ones:
+        best_term = None
+        best_coverage = []
+        max_coverage = 0
+
+        for row in range(len(k_map)):
+            for col in range(len(k_map[0])):
+                if k_map[row][col] == 1 and not covered[row][col]:
+                    rect = find_max_rectangle(k_map, row, col, covered)
+                    if rect and rect[2] * rect[3] >= 2:
+                        term = get_term_from_rectangle(rect, variables, row_vars, col_vars)
+                        coverage = [(r, c) for r in range(rect[0], rect[0] + rect[2]) 
+                                    for c in range(rect[1], rect[1] + rect[3]) 
+                                    if k_map[r][c] == 1 and not covered[r][c]]
+                        if len(coverage) > max_coverage:
+                            max_coverage = len(coverage)
+                            best_term = term
+                            best_coverage = coverage
+
+        if best_term:
+            minimized_terms.append(best_term)
+            for r, c in best_coverage:
+                covered[r][c] = True
+                if (r, c) in ones:
+                    ones.remove((r, c))
+        else:
+            break
+
+    return minimized_terms
+
+def kmap_minimize(terms, n_vars, vars_, is_dnf=True):
+    if n_vars > 4:
+        print("Карты Карно для более чем 4 переменных не поддерживаются")
+        return []
+    elif n_vars < 2:
+        print("Карты Карно требуют как минимум 2 переменных")
+        return []
+    elif not terms:
+        print("0 (ложь)" if is_dnf else "1 (истина)")
+        return []
+
+    if n_vars == 2:
+        rows, cols = 2, 2
+        row_vars = [vars_[0]]
+        col_vars = [vars_[1]]
+    elif n_vars == 3:
+        rows, cols = 2, 4
+        row_vars = [vars_[0]]
+        col_vars = vars_[1:]
+    else:
+        rows, cols = 4, 4
+        row_vars = vars_[:2]
+        col_vars = vars_[2:]
+
+    k_map = [[0 for _ in range(cols)] for _ in range(rows)]
+
+    for term in terms:
+        row = 0
+        for var in row_vars:
+            row = (row << 1) | term[vars_.index(var)]
+        col = 0
+        for var in col_vars:
+            col = (col << 1) | term[vars_.index(var)]
+        if n_vars >= 3:
+            col = gray_to_binary(col, len(col_vars))
+        k_map[row][col] = 1
+
+    minimized_terms = minimize_karnaugh(k_map, vars_, row_vars, col_vars)
+
+    covered = [[False for _ in range(cols)] for _ in range(rows)]
+    for term in minimized_terms:
+        for r in range(rows):
+            for c in range(cols):
+                if all(term[vars_.index(var)] == 'X' or term[vars_.index(var)] == get_term_from_coords(r, c, vars_, row_vars, col_vars)[vars_.index(var)] for var in vars_):
+                    covered[r][c] = True
+
+    uncovered_terms = []
+    for term in terms:
+        row = 0
+        for var in row_vars:
+            row = (row << 1) | term[vars_.index(var)]
+        col = 0
+        for var in col_vars:
+            col = (col << 1) | term[vars_.index(var)]
+        if n_vars >= 3:
+            col = gray_to_binary(col, len(col_vars))
+        if not covered[row][col]:
+            uncovered_terms.append(term)
+
+    if uncovered_terms:
+        print("Предупреждение: не все термы покрыты в карте Карно!")
+        print("Не покрыты:", [term_to_str(t, vars_, is_dnf) for t in uncovered_terms])
+
+    return [term_to_str(t, vars_, is_dnf) for t in minimized_terms if any(v != 'X' for v in t)]
 
 def main():
     expr = input("Введите логическое выражение :\n")
     print("\nТаблица истинности с подвыражениями:\n")
     data = generate_truth_table_and_forms(expr)
+    if data is None:
+        return
     minterms = data['minterms']
     maxterms = data['maxterms']
     n_vars = data['n_vars']
@@ -617,17 +412,17 @@ def main():
     dnf_kmap = kmap_minimize(minterms, n_vars, vars_, is_dnf=True)
     cnf_kmap = kmap_minimize(maxterms, n_vars, vars_, is_dnf=False)
 
-    print("Карта для ДНФ:")
+    print("Карта для DNF (1→единицы):")
     print_kmap_table(minterms, n_vars, vars_, is_dnf=True)
-    print("\nКарта для КНФ:")
+    print("\nКарта для CNF (0→нули):")
     print_kmap_table(maxterms, n_vars, vars_, is_dnf=False)
 
-    print("\n======= Итог =======")
+    print("\n======= Итоговый рез =======")
 
     print("\nРезультаты минимизации для СДНФ:")
     print("  1) Расчетный метод:", dnf_calc)
     print("  2) Расчетно-табличный метод:         ", dnf_tab)
-    print("  3) Метод Карно:                      ",  " ∨ ".join(dnf_kmap))
+    print("  3) Метод Карно:                      ", " ∨ ".join(dnf_kmap))
     print("\nРезультаты минимизации для СКНФ:")
     print("  1) Расчетный метод:", cnf_calc)
     print("  2) Расчетно-табличный метод:         ", cnf_tab)
