@@ -7,15 +7,12 @@ def replace_operators(expr):
     expr = re.sub(r'([a-zA-Z0-1()]+)\s*↔\s*([a-zA-Z0-1()]+)', r'(\1 == \2)', expr)
     expr = re.sub(r'([a-zA-Z0-1()]+)\s*⇔\s*([a-zA-Z0-1()]+)', r'(\1 == \2)', expr)
     expr = (expr.replace('!', ' not ')
-            .replace('¬', ' not ')
-            .replace('∧', ' and ')
             .replace('&', ' and ')
-            .replace('∨', ' or ')
             .replace('|', ' or '))
     return expr
 
 def generate_truth_table_and_forms(expr):
-    normalized_expr = expr.replace(' ', '').replace('!', '¬').replace('&', '∧').replace('|', '∨')
+    normalized_expr = expr.replace(' ', '').replace('!').replace('&').replace('|')
     vars_ = sorted(list(set(re.findall(r'\b[a-z]\b', normalized_expr))))
     n_vars = len(vars_)
     truth_table = []
