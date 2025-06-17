@@ -1,7 +1,7 @@
 from itertools import product
 import re
 
-def replace_operators(expr):
+def replace_logical_operators(expr):
     expr = re.sub(r'([a-zA-Z0-1()]+)\s*→\s*([a-zA-Z0-1()]+)', r'(not \1) or \2', expr)
     expr = re.sub(r'([a-zA-Z0-1()]+)\s*⇒\s*([a-zA-Z0-1()]+)', r'(not \1) or \2', expr)
     expr = re.sub(r'([a-zA-Z0-1()]+)\s*↔\s*([a-zA-Z0-1()]+)', r'(\1 == \2)', expr)
@@ -13,41 +13,83 @@ def replace_operators(expr):
     
     return expr
 
-def generate_truth_table_and_forms(expr):
-    normalized_expr = expr.replace(' ', '').replace('!').replace('&' ).replace('|')
-    vars_ = sorted(list(set(re.findall(r'\b[a-z]\b', normalized_expr))))
-    n_vars = len(vars_)
-
+def generate_truth_table(expr):
+    print("\nТаблица истинности с подвыражениями:\n")
+    
+    normalized_expr = expr.replace(' ', '')
+    variables = sorted(list(set(re.findall(r'\b[a-z]\b', normalized_expr))))
+    num_vars = len(variables)
+    
+    sub_expressions = []
+    if '→' in normalized_expr or '⇒' in normalized_expr:
+        parts = re.split(r'→|⇒', normalized_expr)
+        sub_expressions.append(parts[0])
+        sub_expressions.append(parts[1])
+    if '↔' in normalized_expr or '⇔' in normalized_expr:
+        parts = re.split(r'↔|⇔', normalized_expr)
+        sub_expressions.append(parts[0])
+        sub_expressions.append(parts[1])
+    
+    headers = variables.copy()
+    for sub in sub_expressions:
+        headers.append(sub)
+    headers.append(normalized_expr)
+    
+    header_line = " | ".join(headers)
+    print(header_line)
+    print("-" * len(header_line) * 2)
+    
     truth_table = []
-    for values in product([0, 1], repeat=n_vars):
-        var_values = dict(zip(vars_, values))
+    for values in product([0, 1], repeat=num_vars):
+        var_values = dict(zip(variables, values))
+        row = []
+        
+        for var in variables:
+            row.append(str(var_values[var]))
+        
+        sub_values = []
+        for sub in sub_expressions:
+            try:
+                current_sub = sub
+                for var in variables:
+                    current_sub = current_sub.replace(var, str(var_values[var]))
+                current_sub = replace_logical_operators(current_sub)
+                sub_values.append(int(eval(current_sub)))
+            except:
+                sub_values.append(0)
+        
         current_expr = normalized_expr
-
-        for var in vars_:
+        for var in variables:
             current_expr = current_expr.replace(var, str(var_values[var]))
-
-        current_expr = replace_operators(current_expr)
-        current_expr = ' '.join(current_expr.split())
-
+        current_expr = replace_logical_operators(current_expr)
         try:
-            result = eval(current_expr)
-            truth_table.append((values, int(bool(result))))
-        except Exception as e:
-            print(f"Ошибка при вычислении выражения: {e}")
-            print(f"Выражение после замен: {current_expr}")
-            return None
-
+            result = int(eval(current_expr))
+        except:
+            result = 0
+        
+        row.extend([str(v) for v in sub_values])
+        row.append(str(result))
+        print(" | ".join(row))
+        
+        truth_table.append((values, result))
+    
     minterms = [term for term, res in truth_table if res == 1]
     maxterms = [term for term, res in truth_table if res == 0]
-
+    
+    print("\nСовершенная дизъюнктивная нормальная форма (СДНФ)")
+    print(" ∨ ".join(["(" + "∧".join([f"¬{variables[i]}" if not t[i] else variables[i] for i in range(num_vars)]) + ")" for t in minterms]))
+    
+    print("\nСовершенная конъюнктивная нормальная форма (СКНФ)")
+    print(" ∧ ".join(["(" + "∨".join([f"¬{variables[i]}" if t[i] else variables[i] for i in range(num_vars)]) + ")" for t in maxterms]))
+    
     return {
         'minterms': minterms,
         'maxterms': maxterms,
-        'n_vars': n_vars,
-        'vars_sorted': vars_
+        'num_vars': num_vars,
+        'variables': variables
     }
 
-def term_to_str(term, variables, is_dnf=True):
+def format_term(term, variables, is_dnf=True):
     parts = []
     for val, var in zip(term, variables):
         if val == 'X':
@@ -58,13 +100,13 @@ def term_to_str(term, variables, is_dnf=True):
             parts.append(var if val == 0 else f"¬{var}")
     return "".join(parts) if is_dnf else f"({'∨'.join(parts)})" if parts else ""
 
-def minimize_calc_dnf(terms, n_vars, vars_):
-    return calculate_method(terms, vars_, is_dnf=True)
+def minimize_dnf_calculus(terms, num_vars, variables):
+    return minimize_by_calculus(terms, variables, is_dnf=True)
 
-def minimize_calc_cnf(terms, n_vars, vars_):
-    return calculate_method(terms, vars_, is_dnf=False)
+def minimize_cnf_calculus(terms, num_vars, variables):
+    return minimize_by_calculus(terms, variables, is_dnf=False)
 
-def calculate_method(terms, variables, is_dnf=True):
+def minimize_by_calculus(terms, variables, is_dnf=True):
     if not terms:
         return []
 
@@ -77,7 +119,7 @@ def calculate_method(terms, variables, is_dnf=True):
 
         print("\nТекущие термы:")
         for term in current_terms:
-            print(term_to_str(term, variables, is_dnf), end=" ")
+            print(format_term(term, variables, is_dnf), end=" ")
         print()
 
         for i in range(len(current_terms)):
@@ -102,7 +144,7 @@ def calculate_method(terms, variables, is_dnf=True):
                         used.add(i)
                         used.add(j)
                         print(
-                            f"Склеиваем: {term_to_str(term1, variables, is_dnf)} и {term_to_str(term2, variables, is_dnf)} -> {term_to_str(new_term, variables, is_dnf)}")
+                            f"Склеиваем: {format_term(term1, variables, is_dnf)} и {format_term(term2, variables, is_dnf)} -> {format_term(new_term, variables, is_dnf)}")
 
         for i in range(len(current_terms)):
             if i not in used and current_terms[i] not in new_terms:
@@ -143,37 +185,37 @@ def calculate_method(terms, variables, is_dnf=True):
     print("\nМинимизированная форма:")
     if essential_terms:
         separator = " ∨ " if is_dnf else " ∧ "
-        print(separator.join(term_to_str(t, variables, is_dnf) for t in essential_terms))
+        print(separator.join(format_term(t, variables, is_dnf) for t in essential_terms))
     else:
         print("0" if is_dnf else "1")
 
-    return [term_to_str(t, variables, is_dnf) for t in essential_terms]
+    return [format_term(t, variables, is_dnf) for t in essential_terms]
 
-def minimize_tab_dnf(terms, n_vars, vars_):
-    return table_method(terms, vars_, is_dnf=True)
+def minimize_dnf_table(terms, num_vars, variables):
+    return minimize_by_table(terms, variables, is_dnf=True)
 
-def minimize_tab_cnf(terms, n_vars, vars_):
-    return table_method(terms, vars_, is_dnf=False)
+def minimize_cnf_table(terms, num_vars, variables):
+    return minimize_by_table(terms, variables, is_dnf=False)
 
-def table_method(terms, variables, is_dnf=True):
-    minimized_terms = calculate_method(terms, variables, is_dnf)
+def minimize_by_table(terms, variables, is_dnf=True):
+    minimized_terms = minimize_by_calculus(terms, variables, is_dnf)
     if not minimized_terms or not terms:
         return []
 
     print("\nТаблица покрытия:")
     imp_width = max(len(t) for t in minimized_terms) + 2
-    term_width = max(len(term_to_str(t, variables, is_dnf)) for t in terms) + 2
+    term_width = max(len(format_term(t, variables, is_dnf)) for t in terms) + 2
 
     header = " " * imp_width
     for term in terms:
-        header += f" {term_to_str(term, variables, is_dnf):^{term_width}}"
+        header += f" {format_term(term, variables, is_dnf):^{term_width}}"
     print(header)
 
     for imp in minimized_terms:
         row = f" {imp:<{imp_width - 1}}"
         for term in terms:
             match = False
-            for t in calculate_method([term], variables, is_dnf):
+            for t in minimize_by_calculus([term], variables, is_dnf):
                 if t == imp:
                     match = True
                     break
@@ -248,34 +290,34 @@ def get_term_from_coords(row, col, variables, row_vars, col_vars):
     
     return tuple(term)
 
-def print_kmap_table(terms, n_vars, vars_, is_dnf=True):
+def print_kmap(terms, num_vars, variables, is_dnf=True):
     if not terms:
         print("0 (ложь)" if is_dnf else "1 (истина)")
         return
 
-    if n_vars == 2:
+    if num_vars == 2:
         rows, cols = 2, 2
-        row_vars = [vars_[0]]
-        col_vars = [vars_[1]]
-    elif n_vars == 3:
+        row_vars = [variables[0]]
+        col_vars = [variables[1]]
+    elif num_vars == 3:
         rows, cols = 2, 4
-        row_vars = [vars_[0]]
-        col_vars = vars_[1:]
+        row_vars = [variables[0]]
+        col_vars = variables[1:]
     else:
         rows, cols = 4, 4
-        row_vars = vars_[:2]
-        col_vars = vars_[2:]
+        row_vars = variables[:2]
+        col_vars = variables[2:]
 
     k_map = [[0 for _ in range(cols)] for _ in range(rows)]
 
     for term in terms:
         row = 0
         for var in row_vars:
-            row = (row << 1) | term[vars_.index(var)]
+            row = (row << 1) | term[variables.index(var)]
         col = 0
         for var in col_vars:
-            col = (col << 1) | term[vars_.index(var)]
-        if n_vars >= 3:
+            col = (col << 1) | term[variables.index(var)]
+        if num_vars >= 3:
             col = gray_to_binary(col, len(col_vars))
         k_map[row][col] = 1
 
@@ -294,7 +336,7 @@ def print_kmap_table(terms, n_vars, vars_, is_dnf=True):
             row_str += f"  {k_map[row][col]:^{col_width}}"
         print(row_str)
 
-def minimize_karnaugh(k_map, variables, row_vars, col_vars):
+def minimize_kmap(k_map, variables, row_vars, col_vars):
     minimized_terms = []
     covered = [[False for _ in row] for row in k_map]
     ones = [(r, c) for r in range(len(k_map)) for c in range(len(k_map[0])) if k_map[r][c] == 1]
@@ -329,104 +371,117 @@ def minimize_karnaugh(k_map, variables, row_vars, col_vars):
 
     return minimized_terms
 
-def kmap_minimize(terms, n_vars, vars_, is_dnf=True):
-    if n_vars > 4:
+def minimize_by_kmap(terms, num_vars, variables, is_dnf=True):
+    if num_vars > 4:
         print("Карты Карно для более чем 4 переменных не поддерживаются")
         return []
-    elif n_vars < 2:
+    elif num_vars < 2:
         print("Карты Карно требуют как минимум 2 переменных")
         return []
     elif not terms:
         print("0 (ложь)" if is_dnf else "1 (истина)")
         return []
 
-    if n_vars == 2:
+    if num_vars == 2:
         rows, cols = 2, 2
-        row_vars = [vars_[0]]
-        col_vars = [vars_[1]]
-    elif n_vars == 3:
+        row_vars = [variables[0]]
+        col_vars = [variables[1]]
+    elif num_vars == 3:
         rows, cols = 2, 4
-        row_vars = [vars_[0]]
-        col_vars = vars_[1:]
+        row_vars = [variables[0]]
+        col_vars = variables[1:]
     else:
         rows, cols = 4, 4
-        row_vars = vars_[:2]
-        col_vars = vars_[2:]
+        row_vars = variables[:2]
+        col_vars = variables[2:]
 
     k_map = [[0 for _ in range(cols)] for _ in range(rows)]
 
     for term in terms:
         row = 0
         for var in row_vars:
-            row = (row << 1) | term[vars_.index(var)]
+            row = (row << 1) | term[variables.index(var)]
         col = 0
         for var in col_vars:
-            col = (col << 1) | term[vars_.index(var)]
-        if n_vars >= 3:
+            col = (col << 1) | term[variables.index(var)]
+        if num_vars >= 3:
             col = gray_to_binary(col, len(col_vars))
         k_map[row][col] = 1
 
-    minimized_terms = minimize_karnaugh(k_map, vars_, row_vars, col_vars)
+    minimized_terms = minimize_kmap(k_map, variables, row_vars, col_vars)
 
     covered = [[False for _ in range(cols)] for _ in range(rows)]
     for term in minimized_terms:
         for r in range(rows):
             for c in range(cols):
-                if all(term[vars_.index(var)] == 'X' or term[vars_.index(var)] == get_term_from_coords(r, c, vars_, row_vars, col_vars)[vars_.index(var)] for var in vars_):
+                if all(term[variables.index(var)] == 'X' or term[variables.index(var)] == get_term_from_coords(r, c, variables, row_vars, col_vars)[variables.index(var)] for var in variables):
                     covered[r][c] = True
 
     uncovered_terms = []
     for term in terms:
         row = 0
         for var in row_vars:
-            row = (row << 1) | term[vars_.index(var)]
+            row = (row << 1) | term[variables.index(var)]
         col = 0
         for var in col_vars:
-            col = (col << 1) | term[vars_.index(var)]
-        if n_vars >= 3:
+            col = (col << 1) | term[variables.index(var)]
+        if num_vars >= 3:
             col = gray_to_binary(col, len(col_vars))
         if not covered[row][col]:
             uncovered_terms.append(term)
 
     if uncovered_terms:
         print("Предупреждение: не все термы покрыты в карте Карно!")
-        print("Не покрыты:", [term_to_str(t, vars_, is_dnf) for t in uncovered_terms])
+        print("Не покрыты:", [format_term(t, variables, is_dnf) for t in uncovered_terms])
 
-    return [term_to_str(t, vars_, is_dnf) for t in minimized_terms if any(v != 'X' for v in t)]
+    return [format_term(t, variables, is_dnf) for t in minimized_terms if any(v != 'X' for v in t)]
 
 def main():
-    expr = input("Введите логическое выражение :\n")
-    print("\nТаблица истинности с подвыражениями:\n")
-    data = generate_truth_table_and_forms(expr)
+    expr = input("Введите логическое выражение:\n")
+    data = generate_truth_table(expr)
     if data is None:
         return
+    
     minterms = data['minterms']
     maxterms = data['maxterms']
-    n_vars = data['n_vars']
-    vars_ = data['vars_sorted']
+    num_vars = data['num_vars']
+    variables = data['variables']
+    
     print("\n========== Результаты минимизации ==========")
-    dnf_calc = minimize_calc_dnf(minterms, n_vars, vars_)
-    cnf_calc = minimize_calc_cnf(maxterms, n_vars, vars_)
-    dnf_tab = minimize_tab_dnf(minterms, n_vars, vars_)
-    cnf_tab = minimize_tab_cnf(maxterms, n_vars, vars_)
-    dnf_kmap = kmap_minimize(minterms, n_vars, vars_, is_dnf=True)
-    cnf_kmap = kmap_minimize(maxterms, n_vars, vars_, is_dnf=False)
-
-    print("Карта для DNF (1→единицы):")
-    print_kmap_table(minterms, n_vars, vars_, is_dnf=True)
-    print("\nКарта для CNF (0→нули):")
-    print_kmap_table(maxterms, n_vars, vars_, is_dnf=False)
-
-    print("\n======= Итоговый рез =======")
-
+    
+    print("\n==== Минимизация СДНФ (расчётный метод) ====\n")
+    dnf_calc = minimize_dnf_calculus(minterms, num_vars, variables)
+    print("\nРЕЗУЛЬТАТ (расчётный метод, СДНФ):", " ∨ ".join(dnf_calc))
+    
+    print("\n==== Минимизация СКНФ (расчётный метод) ====\n")
+    cnf_calc = minimize_cnf_calculus(maxterms, num_vars, variables)
+    print("\nРЕЗУЛЬТАТ (расчётный метод, СКНФ):", " ∧ ".join(cnf_calc))
+    
+    print("\n==== Минимизация СДНФ (расчётно-табличный метод) ====\n")
+    dnf_tab = minimize_dnf_table(minterms, num_vars, variables)
+    print("\nРЕЗУЛЬТАТ (табличный метод, СДНФ):", " ∨ ".join(dnf_tab))
+    
+    print("\n==== Минимизация СКНФ (расчётно-табличный метод) ====\n")
+    cnf_tab = minimize_cnf_table(maxterms, num_vars, variables)
+    print("\nРЕЗУЛЬТАТ (табличный метод, СКНФ):", " ∧ ".join(cnf_tab))
+    
+    print("\nКарта для ДНФ:")
+    print_kmap(minterms, num_vars, variables, is_dnf=True)
+    
+    print("\nКарта для КНФ:")
+    print_kmap(maxterms, num_vars, variables, is_dnf=False)
+    
+    print("\n======= Итог =======")
+    
     print("\nРезультаты минимизации для СДНФ:")
-    print("  1) Расчетный метод:", dnf_calc)
-    print("  2) Расчетно-табличный метод:         ", dnf_tab)
-    print("  3) Метод Карно:                      ", " ∨ ".join(dnf_kmap))
+    print("  1) Расчетный метод:                  ", " ∨ ".join(dnf_calc))
+    print("  2) Расчетно-табличный метод:         ", " ∨ ".join(dnf_tab))
+    print("  3) Метод Карно:                      ", " ∨ ".join(minimize_by_kmap(minterms, num_vars, variables, is_dnf=True)))
+    
     print("\nРезультаты минимизации для СКНФ:")
-    print("  1) Расчетный метод:", cnf_calc)
-    print("  2) Расчетно-табличный метод:         ", cnf_tab)
-    print("  3) Метод Карно:                      ", " ∧ ".join(cnf_kmap))
+    print("  1) Расчетный метод:                  ", " ∧ ".join(cnf_calc))
+    print("  2) Расчетно-табличный метод:         ", " ∧ ".join(cnf_tab))
+    print("  3) Метод Карно:                      ", " ∧ ".join(minimize_by_kmap(maxterms, num_vars, variables, is_dnf=False)))
 
 if __name__ == "__main__":
     main()
