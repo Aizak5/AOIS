@@ -14,7 +14,7 @@ def replace_operators(expr):
     return expr
 
 def generate_truth_table_and_forms(expr):
-    normalized_expr = expr.replace(' ', '').replace('!', '¬').replace('&', '∧').replace('|', '∨')
+    normalized_expr = expr.replace(' ', '').replace('!').replace('&' ).replace('|')
     vars_ = sorted(list(set(re.findall(r'\b[a-z]\b', normalized_expr))))
     n_vars = len(vars_)
 
